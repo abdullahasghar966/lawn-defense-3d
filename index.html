@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lawn Defense 3D</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <div id="hud" style="display:none">
+    <div id="sun-counter">
+      <span class="sun-icon">&#9728;</span>
+      <span id="sun-amount">0</span>
+    </div>
+    <div id="seed-cards"></div>
+    <div id="shovel-btn" title="Shovel — dig up a plant (no sun refund)">
+      <svg viewBox="0 0 24 24" width="38" height="38" aria-hidden="true">
+        <g transform="rotate(34 12 12)">
+          <rect x="9.1" y="1.5" width="5.8" height="3" rx="1.5" fill="#7e5530"/>
+          <rect x="10.6" y="3.2" width="2.8" height="10.4" fill="#ac7a44"/>
+          <rect x="12.2" y="3.2" width="1.2" height="10.4" fill="#8a5e33"/>
+          <rect x="9.7" y="12.8" width="4.6" height="2" rx="0.5" fill="#6d7681"/>
+          <path d="M8.0 14.7 L16.0 14.7 L15.4 18.5 Q14.7 21.3 12 22.5 Q9.3 21.3 8.6 18.5 Z" fill="#c4cdd7" stroke="#78818c" stroke-width="0.75" stroke-linejoin="round"/>
+          <path d="M10.1 15.8 L10.1 18.6 Q10.4 20.3 11.3 21.2" fill="none" stroke="#eff4f9" stroke-width="0.9" stroke-linecap="round"/>
+        </g>
+      </svg>
+    </div>
+    <div id="wave-info">
+      <div id="level-label"></div>
+      <div id="wave-label">Wave 0 / 0</div>
+      <div id="wave-bar"><div id="wave-fill"></div></div>
+    </div>
+  </div>
+
+  <div id="banner"></div>
+  <div id="overlay"></div>
+</div>
+<script type="importmap">
+{ "imports": { "three": "./lib/three.module.js" } }
+</script>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

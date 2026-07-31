@@ -1,0 +1,13 @@
+{
+  "name": "lawn-defense-3d",
+  "version": "1.0.0",
+  "description": "A 3D lane-defense game built with Three.js — 16 plants, 10 zombies, 11 levels.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "http-server -p 5173 -c-1 .",
+    "pretest": "node scripts/link-three.mjs",
+    "test": "node test/sim.mjs"
+  },
+  "license": "MIT"
+}
