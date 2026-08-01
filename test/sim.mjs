@@ -1,6 +1,8 @@
 import { Plant, Zombie, Projectile, Lob } from '../src/entities.js';
 import { PLANT_BUILDERS, buildZombie } from '../src/models.js';
 import { PLANTS, ZOMBIES, ROWS, TILE, boardX, boardZ, worldToCol } from '../src/constants.js';
+import { LEVELS } from '../src/levels.js';
+import { sfx } from '../src/sfx.js';
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -354,6 +356,56 @@ console.log('19. Sunflower beast mode — panic bloom then sacrifice');
   step(g, 2);
   check('erupted a fountain of suns', (g.sunsSpawned || 0) >= 6);
   check('sacrificed itself — tile is free again', (g.removed || []).includes('sunflower') && g.grid[2][1] === null);
+}
+
+console.log('20. A breaching zombie hands control to the cinematic');
+{
+  const g = makeGame();
+  const w = addPlant(g, 'wallnut', 2, 1);
+  const z = addZombie(g, 'basic', 2, -6.0);
+  z.state = 'BREACH';
+  const x0 = z.x;
+  step(g, 2);
+  check('stops walking itself', z.x === x0 && z.state === 'BREACH');
+  check('and stops eating on the way past', w.hp === w.maxHp);
+}
+
+console.log('21. Breach audio is safe with no AudioContext');
+{
+  let threw = null;
+  try {
+    sfx.scream();
+    sfx.screamFar(0.2);
+    sfx.doorBurst();
+    sfx.doorSlam();
+    sfx.heartbeat();
+    sfx.crunch();
+  } catch (e) {
+    threw = e;
+  }
+  check('every breach sound no-ops headlessly', threw === null);
+}
+
+console.log('22. Campaign data is well formed');
+{
+  let badPlant = null, badZombie = null, badRow = null, badDelay = null;
+  for (const lv of LEVELS) {
+    for (const p of lv.plants) if (!PLANTS[p]) badPlant = `${lv.name}: ${p}`;
+    for (const u of lv.unlocks || []) if (!PLANTS[u]) badPlant = `${lv.name}: ${u}`;
+    for (const w of lv.waves) {
+      if (!(w.delay > 0)) badDelay = lv.name;
+      for (const zd of w.zombies) {
+        if (!ZOMBIES[zd.type]) badZombie = `${lv.name}: ${zd.type}`;
+        if (zd.row < -1 || zd.row >= ROWS) badRow = `${lv.name}: row ${zd.row}`;
+      }
+    }
+  }
+  check('every plant referenced exists', badPlant === null);
+  check('every zombie referenced exists', badZombie === null);
+  check('every spawn row is on the board (or -1 for random)', badRow === null);
+  check('every wave has a positive delay', badDelay === null);
+  // huge waves are led by a flag zombie the game injects itself
+  check('the flag zombie the game spawns is defined', !!ZOMBIES.flag);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

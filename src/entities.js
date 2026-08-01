@@ -291,6 +291,14 @@ export class Zombie {
     this.x = spawnX;
     this.z = boardZ(row);
     this.walkPhase = Math.random() * Math.PI * 2;
+    // Per-zombie gait damage, so a crowd never marches in lockstep.
+    this.gait = {
+      strideL: 0.72 + Math.random() * 0.5,
+      strideR: 0.72 + Math.random() * 0.5,
+      lean: -0.06 - Math.random() * 0.1,
+      sway: 0.6 + Math.random() * 0.8,
+      headTilt: (Math.random() - 0.5) * 0.26,
+    };
     this.prevSin = 0;
     this.dieTimer = 0;
     this.flash = 0;
@@ -375,6 +383,60 @@ export class Zombie {
         head.scale.multiplyScalar(this.scaleFactor);
         this.game.particles.gib(head, pos, { vx: -0.4, vy: 3, spin: 8 });
       }
+    }
+  }
+
+  /**
+   * The shamble. A zombie walk is a normal gait done badly, so this is a real
+   * cycle — hips swing, the trailing knee folds to lift the heel, the pelvis
+   * counter-rotates against the shoulders, and the body drops onto each planted
+   * foot — then degraded per zombie by `gait`: one leg is stiffer than the other
+   * (the limp), the torso is permanently pitched forward, and the head lolls.
+   */
+  animateWalk(phase, limbs) {
+    if (!limbs) return;
+    const g = this.gait;
+    const s = Math.sin(phase);
+    const sL = Math.sin(phase);
+    const sR = Math.sin(phase + Math.PI);
+
+    // Hip swing, each leg scaled by its own stiffness so the gait is lopsided.
+    if (limbs.legL) {
+      limbs.legL.rotation.z = sL * 0.5 * g.strideL;
+      // Knee only ever folds backward, and folds most as the foot trails behind.
+      if (limbs.legL.userData.knee) {
+        limbs.legL.userData.knee.rotation.z = Math.max(0, sL) * 0.85 * g.strideL + 0.06;
+      }
+    }
+    if (limbs.legR) {
+      limbs.legR.rotation.z = sR * 0.5 * g.strideR;
+      if (limbs.legR.userData.knee) {
+        limbs.legR.userData.knee.rotation.z = Math.max(0, sR) * 0.85 * g.strideR + 0.06;
+      }
+    }
+
+    // Body drops onto whichever foot is planted — twice per stride.
+    const drop = Math.abs(Math.cos(phase));
+    this.mesh.position.y = (0.035 - drop * 0.035) * this.scaleFactor;
+
+    if (limbs.body) {
+      limbs.body.rotation.z = g.lean + Math.sin(phase * 2) * 0.018;
+      limbs.body.rotation.y = -s * 0.1;           // pelvis counter-rotation
+      limbs.body.rotation.x = Math.sin(phase) * 0.03 * g.sway;
+    }
+    // Arms swing opposite the leg on the same side, and drag rather than pump.
+    if (limbs.armL) {
+      limbs.armL.rotation.z = -sL * 0.16;
+      limbs.armL.rotation.y = sL * 0.14;
+    }
+    if (limbs.armR) {
+      limbs.armR.rotation.z = -sR * 0.16;
+      limbs.armR.rotation.y = sR * 0.14;
+    }
+    if (limbs.head) {
+      limbs.head.rotation.z = g.headTilt + Math.sin(phase * 0.5) * 0.1;
+      limbs.head.rotation.y = Math.sin(phase * 0.34) * 0.16;
+      limbs.head.rotation.x = Math.sin(phase) * 0.05;
     }
   }
 
@@ -493,14 +555,7 @@ export class Zombie {
       this.walkPhase += dt * (this.raged ? 10 : 6);
       this.x -= this.effSpeed() * dt;
       this.mesh.position.x = this.x;
-      this.mesh.position.y = Math.abs(Math.sin(this.walkPhase)) * 0.04 * this.scaleFactor;
-      if (limbs) {
-        if (limbs.legL) limbs.legL.rotation.z = Math.sin(this.walkPhase) * 0.5;
-        if (limbs.legR) limbs.legR.rotation.z = -Math.sin(this.walkPhase) * 0.5;
-        if (limbs.armL) limbs.armL.rotation.y = Math.sin(this.walkPhase * 0.7) * 0.1;
-        if (limbs.armR) limbs.armR.rotation.y = -Math.sin(this.walkPhase * 0.7) * 0.1;
-        if (limbs.head) limbs.head.rotation.z = Math.sin(this.walkPhase * 0.5) * 0.12;
-      }
+      this.animateWalk(this.walkPhase, limbs);
       const fc = this.mesh.userData.flagCloth;
       if (fc) fc.rotation.y = Math.sin(this.walkPhase * 1.4) * 0.3;
 
@@ -702,16 +757,49 @@ export class Mower {
     this.z = boardZ(row);
     this.active = false;
     this.gone = false;
+    this.runT = 0;
+    this.speed = 0;
+    this.clipT = 0;
     mesh.position.set(x, 0, this.z);
   }
 
   update(dt, game) {
     if (!this.active) return;
-    this.x += 6.5 * dt;
+    const ud = this.mesh.userData;
+    this.runT += dt;
+
+    // Spool up rather than teleporting to full speed the instant it trips.
+    this.speed = Math.min(6.8, this.speed + 16 * dt);
+    this.x += this.speed * dt;
     this.mesh.position.x = this.x;
-    this.mesh.rotation.x += dt * 2;
+
+    // Engine vibration: the chassis judders and pitches slightly, it does not roll.
+    const shake = Math.min(1, this.runT * 6);
+    this.mesh.position.y = Math.abs(Math.sin(this.runT * 46)) * 0.012 * shake;
+    this.mesh.position.z = this.z + Math.sin(this.runT * 39) * 0.012 * shake;
+    this.mesh.rotation.z = -0.05 * shake + Math.sin(this.runT * 31) * 0.02 * shake;
+    if (ud.reel) ud.reel.rotation.x += dt * 46;
+    for (const w of ud.wheels || []) w.rotation.y += dt * this.speed * 7;
+
+    // Throw a steady spray of shredded grass out of the back of the reel.
+    this.clipT -= dt;
+    if (this.clipT <= 0) {
+      this.clipT = 0.03;
+      game.particles.burst(this.x + 0.3, 0.12, this.z, {
+        color: 0x69a83a, count: 2, speed: 1.8, life: 0.45, size: 0.55, up: 2.2, gravity: 9,
+      });
+    }
+
     for (const z of game.zombies) {
-      if (z.row === this.row && z.state !== 'DYING' && Math.abs(z.x - this.x) < 0.55) z.die();
+      if (z.row === this.row && z.state !== 'DYING' && Math.abs(z.x - this.x) < 0.55) {
+        // Hit hard enough to be worth watching: debris, a jolt, and a lurch.
+        game.particles.burst(z.x, 0.5, this.z, { color: 0x7a8a5e, count: 18, speed: 3.2, life: 0.6 });
+        game.particles.burst(z.x, 0.3, this.z, { color: 0x4a5a2a, count: 10, speed: 2.2, life: 0.5 });
+        game.shake(0.14, 0.22);
+        this.speed *= 0.55;
+        sfx.crunch();
+        z.die();
+      }
     }
     if (this.x > boardX(8) + 3) this.gone = true;
   }

@@ -29,17 +29,20 @@ export const PLANTS = {
   melonpult:   { name: 'Melon-pult',   cost: 300, cooldown: 5,  hp: 300,  behavior: 'lobber', interval: 2.6, dmg: 95, splash: 1.0 },
 };
 
+// Difficulty pass: every zombie hits harder and takes more killing than the
+// original tuning. Speeds moved only slightly — pace is what makes a lane feel
+// unfair, so the pressure comes from hp, dps and wave density instead.
 export const ZOMBIES = {
-  basic:      { name: 'Zombie',           hp: 100, speed: 0.28, dps: 60 },
-  flag:       { name: 'Flag zombie',      hp: 130, speed: 0.37, dps: 60, flag: true },
-  conehead:   { name: 'Conehead',         hp: 260, speed: 0.28, dps: 60 },
-  buckethead: { name: 'Buckethead',       hp: 500, speed: 0.28, dps: 60 },
-  polevault:  { name: 'Pole vaulter',     hp: 240, speed: 0.44, dps: 60, vault: true },
-  newspaper:  { name: 'Newspaper zombie', hp: 150, speed: 0.26, dps: 60, paper: 130 },
-  screendoor: { name: 'Screen door',      hp: 120, speed: 0.28, dps: 60, shield: 300 },
-  football:   { name: 'Football zombie',  hp: 560, speed: 0.5,  dps: 85 },
-  imp:        { name: 'Imp',              hp: 70,  speed: 0.55, dps: 45, small: true },
-  brute:      { name: 'The Brute',        hp: 3400, speed: 0.13, dps: 0, boss: true },
+  basic:      { name: 'Zombie',           hp: 130, speed: 0.30, dps: 72 },
+  flag:       { name: 'Flag zombie',      hp: 175, speed: 0.39, dps: 72, flag: true },
+  conehead:   { name: 'Conehead',         hp: 340, speed: 0.30, dps: 72 },
+  buckethead: { name: 'Buckethead',       hp: 650, speed: 0.29, dps: 78 },
+  polevault:  { name: 'Pole vaulter',     hp: 310, speed: 0.46, dps: 72, vault: true },
+  newspaper:  { name: 'Newspaper zombie', hp: 195, speed: 0.27, dps: 72, paper: 160 },
+  screendoor: { name: 'Screen door',      hp: 160, speed: 0.29, dps: 72, shield: 380 },
+  football:   { name: 'Football zombie',  hp: 740, speed: 0.52, dps: 100 },
+  imp:        { name: 'Imp',              hp: 95,  speed: 0.57, dps: 55, small: true },
+  brute:      { name: 'The Brute',        hp: 4300, speed: 0.14, dps: 0, boss: true },
 };
 
 export const PROJECTILES = {
@@ -53,11 +56,52 @@ export const RAGE = { range: 2.8, rateMul: 3, bonusDmg: 15 };
 export const SUNFLOWER_BEAST = { range: 2.4, burst: 6, windup: 1.2 };
 
 export const SUN_VALUE = 25;
-export const SKY_SUN_INTERVAL = 8;
-export const SUN_LIFETIME = 9;
+// Sun is scarcer and expires sooner than it used to — economy pressure is the
+// other half of the difficulty pass.
+export const SKY_SUN_INTERVAL = 9.5;
+export const SUN_LIFETIME = 8;
 
+// How long the house-breach cinematic runs before the defeat screen appears.
+export const BREACH_DURATION = 4.2;
+
+/**
+ * Per-theme lighting. The sky gradient is also the image-based light (PMREM), so
+ * ambient strength falls out of the sky colours themselves; `exposure` grades the
+ * ACES-tonemapped result. `tileMul` still tints albedo, but only partway (see
+ * scaleColor in models.js) because the light rig now carries most of the mood.
+ */
 export const THEMES = {
-  day:   { skyTop: '#5eb8e8', skyBottom: '#c8ecf8', fogFar: 45, ambient: 0.8,  sunColor: 0xfff2d0, sunIntensity: 1.7, tileMul: 1.0 },
-  night: { skyTop: '#0e1630', skyBottom: '#3a4a78', fogFar: 40, ambient: 0.45, sunColor: 0x9ab0e8, sunIntensity: 0.95, tileMul: 0.55 },
-  dusk:  { skyTop: '#3a2048', skyBottom: '#d88a5a', fogFar: 42, ambient: 0.6,  sunColor: 0xe8b090, sunIntensity: 1.15, tileMul: 0.75 },
+  day: {
+    name: 'day',
+    skyTop: '#3f8fd6', skyMid: '#8ec6ea', skyBottom: '#d8ecf4',
+    groundHaze: '#6f8a4e', groundDeep: '#33461f',
+    sunGlowInner: 'rgba(255,248,222,1)', sunGlowMid: 'rgba(255,232,178,0.5)',
+    clouds: true, stars: false,
+    fogColor: '#bcd9e2', fogNear: 22, fogFar: 58,
+    ambient: 0.12, hemiSky: 0x9ec8ea, hemiGround: 0x46602a, hemiIntensity: 0.42,
+    sunColor: 0xfff0cc, sunIntensity: 4.4, sunPos: [7.5, 9, 6.5],
+    exposure: 0.95, tileMul: 1.0,
+  },
+  night: {
+    name: 'night',
+    skyTop: '#060b1c', skyMid: '#132043', skyBottom: '#2b3c68',
+    groundHaze: '#1e2a3a', groundDeep: '#0c1219',
+    sunGlowInner: 'rgba(216,228,255,0.95)', sunGlowMid: 'rgba(150,176,232,0.28)',
+    clouds: false, stars: true,
+    fogColor: '#1a2540', fogNear: 16, fogFar: 44,
+    ambient: 0.07, hemiSky: 0x44598e, hemiGround: 0x121c0e, hemiIntensity: 0.3,
+    sunColor: 0xa8bcf0, sunIntensity: 1.7, sunPos: [8, 12, -5],
+    exposure: 1.18, tileMul: 0.55,
+  },
+  dusk: {
+    name: 'dusk',
+    skyTop: '#2c1a44', skyMid: '#8a4a58', skyBottom: '#e09a5e',
+    groundHaze: '#5a4230', groundDeep: '#241a14',
+    sunGlowInner: 'rgba(255,214,150,1)', sunGlowMid: 'rgba(240,140,80,0.45)',
+    clouds: true, stars: false,
+    fogColor: '#b0794f', fogNear: 18, fogFar: 50,
+    ambient: 0.09, hemiSky: 0xc8825a, hemiGround: 0x35261a, hemiIntensity: 0.34,
+    sunColor: 0xffa864, sunIntensity: 3.1, sunPos: [9, 5.0, 4],
+    exposure: 1.02, tileMul: 0.75,
+  },
 };

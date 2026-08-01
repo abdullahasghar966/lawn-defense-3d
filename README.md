@@ -16,7 +16,7 @@ Then open http://localhost:5173. No build step, no install — the game is plain
 npm test
 ```
 
-Headless simulation of every combat mechanic (40 checks): rage mode, vaulting, shields, torchwood fire peas, boss smash/imp throw, and more.
+Headless simulation of every combat mechanic (52 checks): rage mode, vaulting, shields, torchwood fire peas, boss smash/imp throw, breach handoff, and campaign data integrity.
 
 ## The game
 
@@ -26,8 +26,9 @@ Headless simulation of every combat mechanic (40 checks): rage mode, vaulting, s
 - **Rage mode**: pea-family plants within ~2 tiles of a zombie see red — triple fire rate, bonus damage, glowing shaking heads.
 - **Sunflower beast mode**: when danger closes in, sunflowers panic-bloom — spin, glow, erupt a fountain of 6 suns, and die. Replant or go broke.
 - **Shovel**: the button next to the seed cards digs up a misplaced plant. No sun refund, just like the real thing.
-- **Look**: cel-shaded (toon) materials, gradient skies per theme, expressive faces on every plant and zombie (suits, ties, jaws, derpy eyes), decorated lawn — trees, bushes, daisies, grass tufts, cratered moon at night.
-- **Juice**: camera shake, particle explosions, zombie heads (and hats) that pop off on kills, fire-pea trails through Torchwood, lobbed melon arcs, WebAudio synth SFX (pew/boom/chomp/rage), seed-card icons rendered live from the 3D models, huge-wave flags on the progress bar.
+- **Look**: semi-realistic PBR rendering — filmic (ACES) tonemapping, image-based lighting from a procedural sky, soft shadows, and physically-shaded materials on everything. Every texture (grass, brick, bark, roof shingle, cloth, zombie skin) is drawn procedurally onto a canvas at load with a matching normal map — the project still ships zero binary assets. The yard is dressed with instanced grass, leaf litter, ivy climbing the brickwork, a shingled house with a working front door, a picket fence, and a graveyard.
+- **Breach cinematic**: if a zombie gets past the last mower it doesn't clip through the wall — it crosses to the front door, hammers on it, bursts it open in a shower of splinters, and walks into the dark. Then the house screams. The camera pushes in, the porch light dies, the windows flash red, and the screen bleeds to black.
+- **Juice**: camera shake, particle explosions, zombie heads (and hats) that pop off on kills, fire-pea trails through Torchwood, lobbed melon arcs, WebAudio synth SFX including a formant-synthesised scream, seed-card icons rendered live from the 3D models, huge-wave flags on the progress bar.
 
 ## Architecture
 
@@ -36,7 +37,8 @@ Headless simulation of every combat mechanic (40 checks): rage mode, vaulting, s
 | `src/constants.js` | All balance data — plants, zombies, projectiles, themes |
 | `src/levels.js` | The 11-level campaign (waves, unlocks, themes) |
 | `src/models.js` | 3D mesh builders for every plant, zombie, and prop |
-| `src/entities.js` | Entity classes and the zombie FSM (`WALKING → ATTACKING / VAULTING / SMASH / THROW / DYING`) |
+| `src/textures.js` | Procedural canvas textures + normal maps (no image files) |
+| `src/entities.js` | Entity classes and the zombie FSM (`WALKING → ATTACKING / VAULTING / SMASH / THROW / DYING / BREACH`) |
 | `src/game.js` | Engine — scene, input, economy, waves, level flow, effects |
 | `src/particles.js` | Particle bursts and flying gibs |
 | `src/sfx.js` | Procedural WebAudio sound effects (no audio files) |

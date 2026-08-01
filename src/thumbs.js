@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { PLANT_BUILDERS } from './models.js';
+import { skyEquirect } from './textures.js';
+import { THEMES } from './constants.js';
 
 let renderer = null;
 let scene = null;
@@ -9,12 +11,28 @@ const cache = {};
 function ensure() {
   if (renderer) return;
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-  renderer.setSize(96, 96);
+  renderer.setSize(128, 128);
+  renderer.setPixelRatio(2);
+  // Match the game's grade so a card reads as the same plant you place on the lawn.
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
+
   scene = new THREE.Scene();
-  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
-  const d = new THREE.DirectionalLight(0xfff2d0, 1.4);
-  d.position.set(2, 3, 2.5);
-  scene.add(d);
+  const sky = skyEquirect(THEMES.day);
+  if (sky) {
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromEquirectangular(sky).texture;
+    pmrem.dispose();
+  }
+  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+  const key = new THREE.DirectionalLight(0xfff2d0, 2.6);
+  key.position.set(2, 3, 2.5);
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0xbcd8ff, 0.9);
+  rim.position.set(-2.5, 1.5, -2);
+  scene.add(rim);
+
   camera = new THREE.PerspectiveCamera(38, 1, 0.1, 10);
   camera.position.set(1.05, 1.05, 1.45);
   camera.lookAt(0, 0.42, 0);
