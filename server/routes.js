@@ -14,16 +14,27 @@ import { LEVELS } from '../src/levels.js';
 
 export const COOKIE = 'ld3d_session';
 const MAX_LEVEL_INDEX = LEVELS.length - 1;
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
-const isProd = process.env.NODE_ENV === 'production';
+const isProd = () => process.env.NODE_ENV === 'production';
+const googleClientId = () => process.env.GOOGLE_CLIENT_ID || '';
+
+// Built on first use rather than at import, so the configured and unconfigured
+// paths are both reachable from one test process.
+let cachedGoogleClient = null;
+function googleClient() {
+  const id = googleClientId();
+  if (!id) return null;
+  if (!cachedGoogleClient || cachedGoogleClient.id !== id) {
+    cachedGoogleClient = { id, client: new OAuth2Client(id) };
+  }
+  return cachedGoogleClient.client;
+}
 
 function setSessionCookie(res, token) {
   res.cookie(COOKIE, token, {
     httpOnly: true,                 // unreadable from JavaScript, so XSS cannot lift it
     sameSite: 'lax',                // not sent on cross-site POSTs
-    secure: isProd,                 // HTTPS-only in production
+    secure: isProd(),               // HTTPS-only in production
     maxAge: SESSION_TTL_MS,
     path: '/',
   });
@@ -99,7 +110,14 @@ export const router = Router();
 
 // What the frontend needs to know before rendering the sign-in screen.
 router.get('/config', (req, res) => {
-  res.json({ googleClientId: GOOGLE_CLIENT_ID, emailDelivery: mailConfigured });
+  // `dev` lets the sign-in screen explain missing setup instead of silently
+  // hiding features. Never sent in production, where players would just be
+  // reading someone else's TODO list.
+  res.json({
+    googleClientId: googleClientId(),
+    emailDelivery: mailConfigured,
+    dev: !isProd(),
+  });
 });
 
 router.get('/me', (req, res) => {
@@ -228,7 +246,8 @@ router.post('/auth/google',
   sameOrigin,
   rateLimit({ limit: 20, windowMs: 15 * 60 * 1000, keyFn: byIp }),
   async (req, res) => {
-    if (!googleClient) return res.status(503).json({ error: 'Google sign-in is not configured on this server.' });
+    const client = googleClient();
+    if (!client) return res.status(503).json({ error: 'Google sign-in is not configured on this server.' });
     const { credential } = req.body || {};
     if (typeof credential !== 'string' || !credential) {
       return res.status(400).json({ error: 'Missing Google credential.' });
@@ -237,7 +256,7 @@ router.post('/auth/google',
     let payload;
     try {
       // Verifies signature, issuer, expiry and that the token was minted for us.
-      const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+      const ticket = await client.verifyIdToken({ idToken: credential, audience: googleClientId() });
       payload = ticket.getPayload();
     } catch {
       return res.status(401).json({ error: 'Could not verify that Google sign-in.' });

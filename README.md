@@ -25,7 +25,7 @@ Signing in is never required; "Play as guest" is always on the sign-in screen. S
 It runs with **no configuration at all**: verification codes print to the server console instead of being emailed, and the Google button stays hidden. To turn on the real flows, copy `.env.example` to `.env` and fill in:
 
 - `SESSION_SECRET` — required in production. Without it a random one is generated and every restart signs everybody out.
-- `GOOGLE_CLIENT_ID` — from the Google Cloud console, with `http://localhost:5173` as an authorised JavaScript origin. This flow needs only the client ID, which is public by design; there is no client secret to leak.
+- `GOOGLE_CLIENT_ID` — see below. This flow needs only the client ID, which is public by design; there is no client secret to leak.
 - `SMTP_*` — any SMTP provider, to actually deliver the six-digit codes. Gmail needs an App Password, not your account password.
 
 `.env` is gitignored. Don't commit real values.
@@ -41,6 +41,26 @@ node scripts/dev-account.mjs you@example.com           # mint a fresh code
 ```
 
 It needs direct access to the SQLite file, so it is not a way around the login from anywhere but your own machine, and it refuses to run with `NODE_ENV=production`. Minting a code also requires `SESSION_SECRET` to be set, since codes are signed with it.
+
+### Turning on Google sign-in
+
+The code is already there — the button only hides because no client ID is configured. In development the sign-in screen says so explicitly rather than pretending the feature doesn't exist.
+
+1. Go to <https://console.cloud.google.com/apis/credentials> and pick or create a project.
+2. **OAuth consent screen** → External → fill in app name and your email → Save. While it is in "Testing", add your own Google account under **Test users**.
+3. **Credentials** → **Create credentials** → **OAuth client ID** → **Web application**.
+4. Under **Authorised JavaScript origins** add `http://localhost:5173` (and your real domain later). Leave *redirect URIs* empty — this flow doesn't use them.
+5. Copy the client ID (it ends in `.apps.googleusercontent.com`) into `.env`:
+
+   ```
+   GOOGLE_CLIENT_ID=1234567890-abcdef.apps.googleusercontent.com
+   ```
+
+6. Restart the server. The button appears.
+
+There is deliberately no client secret here. The browser receives a signed ID token from Google and the server verifies its signature and audience before trusting a single field of it, so nothing confidential ever ships to the client.
+
+If someone signs in with Google using an address that already has a password account, the two are linked rather than duplicated — Google has already proven ownership of the address.
 
 ### How the auth is built
 

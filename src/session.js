@@ -13,6 +13,7 @@ export const state = {
   online: false,       // did the API answer at all
   googleClientId: '',
   emailDelivery: false,
+  dev: false,          // server is not in production; safe to surface setup hints
 };
 
 async function api(path, { method = 'GET', body } = {}) {
@@ -56,6 +57,7 @@ export async function loadSession() {
     state.online = true;
     state.googleClientId = config.googleClientId || '';
     state.emailDelivery = !!config.emailDelivery;
+    state.dev = !!config.dev;
     applyAuth(me);
   } catch {
     // No backend — pure guest mode against localStorage.

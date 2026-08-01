@@ -199,6 +199,14 @@ function render({ dismissible }) {
     const gbox = el('div', { className: 'auth-google' });
     card.append(gbox);
     void mountGoogleButton(gbox, showError);
+  } else if (state.dev) {
+    // Say so rather than hiding it — otherwise the feature looks missing rather
+    // than unconfigured. Suppressed in production.
+    card.append(el('div', { className: 'auth-divider' }, [el('span', { textContent: 'or' })]));
+    card.append(el('p', {
+      className: 'auth-devhint',
+      textContent: 'Google sign-in is built in but needs a client ID. Set GOOGLE_CLIENT_ID in .env and restart the server to show the button.',
+    }));
   }
 
   const toggle = el('button', {

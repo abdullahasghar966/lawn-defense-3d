@@ -189,11 +189,45 @@ console.log('10. Google sign-in is disabled without a client ID');
   const c = jar();
   const cfg = await c.call('/api/config');
   check('config advertises no Google client', cfg.data.googleClientId === '');
+  check('dev flag lets the UI explain the gap', cfg.data.dev === true);
   const r = await c.call('/api/auth/google', { method: 'POST', body: { credential: 'fake.token.here' } });
   check('endpoint refuses rather than trusting the token', r.status === 503);
 }
 
-console.log('11. Brute force is rate limited');
+console.log('11. With a client ID configured, Google tokens are actually verified');
+{
+  const c = jar();
+  process.env.GOOGLE_CLIENT_ID = '1234567890-test.apps.googleusercontent.com';
+
+  const cfg = await c.call('/api/config');
+  check('client ID is published to the browser', cfg.data.googleClientId === process.env.GOOGLE_CLIENT_ID);
+
+  const missing = await c.call('/api/auth/google', { method: 'POST', body: {} });
+  check('a missing credential is rejected', missing.status === 400);
+
+  // A syntactically plausible but unsigned JWT. Reaching 401 rather than 503
+  // proves the token really went through signature verification.
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const forged = `${b64({ alg: 'RS256', kid: 'nope' })}.${b64({
+    iss: 'https://accounts.google.com',
+    aud: process.env.GOOGLE_CLIENT_ID,
+    sub: '11223344',
+    email: 'attacker@example.com',
+    email_verified: true,
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  })}.not-a-real-signature`;
+
+  const r = await c.call('/api/auth/google', { method: 'POST', body: { credential: forged } });
+  check('a self-signed token is refused', r.status === 401);
+  check('no session was handed out', c.header === '');
+  check('and no account was created from it', users.byEmail('attacker@example.com') === undefined);
+
+  delete process.env.GOOGLE_CLIENT_ID;
+  const after = await c.call('/api/config');
+  check('unsetting the client ID disables it again', after.data.googleClientId === '');
+}
+
+console.log("12. Brute force is rate limited");
 {
   const c = jar();
   let sawLimit = false;
