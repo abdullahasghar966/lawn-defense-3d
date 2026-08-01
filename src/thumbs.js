@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../lib/three.module.js';
 import { PLANT_BUILDERS } from './models.js';
 import { skyEquirect } from './textures.js';
 import { THEMES } from './constants.js';

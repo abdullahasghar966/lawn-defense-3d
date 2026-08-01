@@ -5,9 +5,15 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "http-server -p 5173 -c-1 .",
-    "pretest": "node scripts/link-three.mjs",
-    "test": "node test/sim.mjs"
+    "start": "node server/index.js",
+    "static": "npx --yes http-server -p 5173 -c-1 .",
+    "test": "node test/sim.mjs && node test/auth.mjs"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "google-auth-library": "^11.0.0",
+    "nodemailer": "^9.0.3"
+  }
 }

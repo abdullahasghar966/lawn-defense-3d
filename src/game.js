@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../lib/three.module.js';
 import {
   COLS, ROWS, TILE, boardX, boardZ,
   ZOMBIE_SPAWN_X, MOWER_X, HOUSE_X,
@@ -11,8 +11,11 @@ import { Particles } from './particles.js';
 import { LEVELS } from './levels.js';
 import { thumbnail } from './thumbs.js';
 import { sfx, initAudio } from './sfx.js';
+import { state as session, getUnlocked, setUnlocked } from './session.js';
+import { openAuth, signOut } from './auth-ui.js';
 
-const STORE_UNLOCKED = 'ld3d.unlocked';
+// Which level to open after the reload that level buttons trigger. Purely a
+// page-handoff, so it stays local even for signed-in players.
 const STORE_PENDING = 'ld3d.pending';
 
 let glowTex = null;
@@ -212,7 +215,7 @@ export class Game {
   }
 
   unlockedCount() {
-    return Math.min(LEVELS.length - 1, parseInt(localStorage.getItem(STORE_UNLOCKED) || '0', 10));
+    return Math.min(LEVELS.length - 1, getUnlocked());
   }
 
   showMenu() {
@@ -222,10 +225,12 @@ export class Game {
     const o = this.hud.overlay;
     o.classList.remove('hidden');
     o.innerHTML = `
+      <div id="account-bar"></div>
       <h1 class="menu-title">Lawn Defense 3D</h1>
       <p class="menu-sub">The zombies are coming. Pick a level — beat it to unlock the next one and new plants.</p>
       <div class="level-grid"></div>
       <p class="menu-hint">Click seed card → click tile. Click suns to collect. Right-click or Esc cancels.</p>`;
+    this.renderAccountBar();
     const grid = o.querySelector('.level-grid');
     LEVELS.forEach((lv, i) => {
       const btn = document.createElement('button');
@@ -242,6 +247,31 @@ export class Game {
       }
       grid.appendChild(btn);
     });
+  }
+
+  /** Who's playing, plus the way in or out. Only meaningful when a server exists. */
+  renderAccountBar() {
+    const bar = document.getElementById('account-bar');
+    if (!bar) return;
+    if (!session.online) {
+      bar.innerHTML = '<span class="acct-who">Offline — progress saved on this device</span>';
+      return;
+    }
+    if (session.user) {
+      bar.innerHTML = `<span class="acct-who">Signed in as <b>${escapeHtml(session.user.name)}</b></span>`;
+      const out = document.createElement('button');
+      out.className = 'acct-btn';
+      out.textContent = 'Sign out';
+      out.addEventListener('click', async () => { await signOut(); this.showMenu(); });
+      bar.append(out);
+    } else {
+      bar.innerHTML = '<span class="acct-who">Playing as guest — progress stays on this device</span>';
+      const inBtn = document.createElement('button');
+      inBtn.className = 'acct-btn';
+      inBtn.textContent = 'Sign in';
+      inBtn.addEventListener('click', () => openAuth());
+      bar.append(inBtn);
+    }
   }
 
   startLevel() {
@@ -685,7 +715,7 @@ export class Game {
     if (won) {
       const prev = this.unlockedCount();
       const next = Math.min(LEVELS.length - 1, Math.max(prev, this.levelIndex + 1));
-      localStorage.setItem(STORE_UNLOCKED, String(next));
+      setUnlocked(next);
       const names = (this.level.unlocks || []).map((t) => PLANTS[t].name);
       if (names.length) unlockedMsg = `New plants unlocked: <b>${names.join(', ')}</b>`;
       else if (this.levelIndex === LEVELS.length - 1) unlockedMsg = 'You beat the whole adventure. The lawn is legend.';
@@ -820,6 +850,12 @@ export class Game {
     this.hud.waveLabel.textContent = `Wave ${Math.min(this.waveIndex, this.level.waves.length)} / ${this.level.waves.length}`;
     this.hud.waveFill.style.width = `${(this.spawnedZombies / this.totalZombies) * 100}%`;
   }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
 }
 
 export function bootLevelIndex() {

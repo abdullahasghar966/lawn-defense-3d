@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../lib/three.module.js';
 import { PLANTS, ZOMBIES, PROJECTILES, RAGE, SUNFLOWER_BEAST, ROWS, TILE, SUN_LIFETIME, boardX, boardZ, worldToCol } from './constants.js';
 import { buildProjectile, buildMelon } from './models.js';
 import { sfx } from './sfx.js';

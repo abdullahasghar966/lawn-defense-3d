@@ -1,0 +1,286 @@
+import { Router } from 'express';
+import { OAuth2Client } from 'google-auth-library';
+import { users, otps, sessions, progress } from './db.js';
+import { sendOtpEmail, mailConfigured } from './mailer.js';
+import { rateLimit, byIp, byIpAndEmail } from './ratelimit.js';
+import {
+  hashPassword, verifyPassword, fakePasswordWork,
+  newSessionToken, hashToken, newOtp, otpMatches,
+  validEmail, passwordProblem,
+  SESSION_TTL_MS, OTP_TTL_MS, OTP_MAX_ATTEMPTS, OTP_RESEND_COOLDOWN_MS,
+} from './security.js';
+// The campaign is the source of truth for how far progress can legitimately go.
+import { LEVELS } from '../src/levels.js';
+
+export const COOKIE = 'ld3d_session';
+const MAX_LEVEL_INDEX = LEVELS.length - 1;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
+
+const isProd = process.env.NODE_ENV === 'production';
+
+function setSessionCookie(res, token) {
+  res.cookie(COOKIE, token, {
+    httpOnly: true,                 // unreadable from JavaScript, so XSS cannot lift it
+    sameSite: 'lax',                // not sent on cross-site POSTs
+    secure: isProd,                 // HTTPS-only in production
+    maxAge: SESSION_TTL_MS,
+    path: '/',
+  });
+}
+
+function readCookie(req, name) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === name) return decodeURIComponent(part.slice(eq + 1).trim());
+  }
+  return null;
+}
+
+/** Resolves req.user from the session cookie. Never throws; anonymous is fine. */
+export function loadSession(req, res, next) {
+  req.user = null;
+  const token = readCookie(req, COOKIE);
+  if (token) {
+    const row = sessions.get(hashToken(token));
+    if (row) req.user = users.byId(row.user_id) || null;
+    else res.clearCookie(COOKIE, { path: '/' });
+  }
+  next();
+}
+
+function requireUser(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Not signed in.' });
+  next();
+}
+
+/**
+ * Rejects state-changing requests whose Origin is not this site. SameSite=Lax
+ * already blocks the classic cross-site form post; this closes the gap for
+ * clients that do not enforce it.
+ */
+function sameOrigin(req, res, next) {
+  const origin = req.headers.origin;
+  if (!origin) return next(); // same-origin fetches often omit it entirely
+  let host;
+  try {
+    host = new URL(origin).host;
+  } catch {
+    return res.status(403).json({ error: 'Bad origin.' });
+  }
+  if (host !== req.headers.host) return res.status(403).json({ error: 'Cross-origin request refused.' });
+  next();
+}
+
+const publicUser = (u) => ({
+  email: u.email,
+  name: u.display_name || u.email.split('@')[0],
+  verified: !!u.verified,
+  hasPassword: !!u.password_hash,
+  linkedGoogle: !!u.google_sub,
+});
+
+async function issueSession(res, user) {
+  const { token, hash } = newSessionToken();
+  sessions.create(hash, user.id, SESSION_TTL_MS);
+  setSessionCookie(res, token);
+}
+
+async function startVerification(email, purpose) {
+  const { code, hash } = newOtp();
+  otps.put(email, hash, purpose, OTP_TTL_MS);
+  await sendOtpEmail(email, code);
+}
+
+export const router = Router();
+
+// What the frontend needs to know before rendering the sign-in screen.
+router.get('/config', (req, res) => {
+  res.json({ googleClientId: GOOGLE_CLIENT_ID, emailDelivery: mailConfigured });
+});
+
+router.get('/me', (req, res) => {
+  if (!req.user) return res.json({ user: null, progress: { unlocked: 0 } });
+  res.json({ user: publicUser(req.user), progress: { unlocked: progress.get(req.user.id) } });
+});
+
+// ---------------------------------------------------------------- signup
+
+router.post('/auth/signup',
+  sameOrigin,
+  rateLimit({ limit: 5, windowMs: 15 * 60 * 1000, keyFn: byIpAndEmail, message: 'Too many signup attempts. Try again shortly.' }),
+  rateLimit({ limit: 20, windowMs: 60 * 60 * 1000, keyFn: byIp }),
+  async (req, res) => {
+    const { email, password } = req.body || {};
+    if (!validEmail(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    const problem = passwordProblem(password);
+    if (problem) return res.status(400).json({ error: problem });
+
+    const existing = users.byEmail(email);
+
+    // An address that already has a finished account is never confirmed or denied
+    // here — the response below is identical either way, so this endpoint cannot
+    // be used to discover who has an account.
+    if (existing && existing.verified) {
+      return res.json({ ok: true, next: 'verify', message: 'Check your email for a 6-digit code.' });
+    }
+
+    const passwordHash = await hashPassword(password);
+    if (existing) users.setPassword(existing.id, passwordHash);
+    else users.create({ email, passwordHash, verified: 0 });
+
+    await startVerification(email, 'signup');
+    res.json({ ok: true, next: 'verify', message: 'Check your email for a 6-digit code.' });
+  });
+
+router.post('/auth/verify',
+  sameOrigin,
+  rateLimit({ limit: 10, windowMs: 15 * 60 * 1000, keyFn: byIpAndEmail, message: 'Too many code attempts. Request a new code.' }),
+  async (req, res) => {
+    const { email, code } = req.body || {};
+    if (!validEmail(email) || typeof code !== 'string') {
+      return res.status(400).json({ error: 'Enter the 6-digit code we emailed you.' });
+    }
+
+    const record = otps.get(email);
+    if (!record) return res.status(400).json({ error: 'That code has expired. Request a new one.' });
+    if (record.expires_at <= Date.now()) {
+      otps.clear(email);
+      return res.status(400).json({ error: 'That code has expired. Request a new one.' });
+    }
+    if (record.attempts >= OTP_MAX_ATTEMPTS) {
+      otps.clear(email);
+      return res.status(429).json({ error: 'Too many wrong codes. Request a new one.' });
+    }
+    if (!otpMatches(code.trim(), record.code_hash)) {
+      otps.bumpAttempts(email);
+      return res.status(400).json({ error: 'That code is not right.' });
+    }
+
+    const user = users.byEmail(email);
+    if (!user) {
+      otps.clear(email);
+      return res.status(400).json({ error: 'That code has expired. Request a new one.' });
+    }
+
+    otps.clear(email);
+    users.markVerified(user.id);
+    await issueSession(res, users.byId(user.id));
+    res.json({ ok: true, user: publicUser(users.byId(user.id)), progress: { unlocked: progress.get(user.id) } });
+  });
+
+router.post('/auth/resend',
+  sameOrigin,
+  rateLimit({ limit: 4, windowMs: 15 * 60 * 1000, keyFn: byIpAndEmail, message: 'Please wait before requesting another code.' }),
+  async (req, res) => {
+    const { email } = req.body || {};
+    if (!validEmail(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+
+    const existing = otps.get(email);
+    if (existing && Date.now() - existing.sent_at < OTP_RESEND_COOLDOWN_MS) {
+      const wait = Math.ceil((OTP_RESEND_COOLDOWN_MS - (Date.now() - existing.sent_at)) / 1000);
+      return res.status(429).json({ error: `Please wait ${wait}s before requesting another code.` });
+    }
+
+    const user = users.byEmail(email);
+    // Same response whether or not there is anything to send.
+    if (user && !user.verified) await startVerification(email, 'signup');
+    res.json({ ok: true, message: 'If that address needs verifying, a new code is on its way.' });
+  });
+
+// ---------------------------------------------------------------- login
+
+router.post('/auth/login',
+  sameOrigin,
+  rateLimit({ limit: 8, windowMs: 15 * 60 * 1000, keyFn: byIpAndEmail, message: 'Too many sign-in attempts. Try again shortly.' }),
+  rateLimit({ limit: 40, windowMs: 60 * 60 * 1000, keyFn: byIp }),
+  async (req, res) => {
+    const { email, password } = req.body || {};
+    if (!validEmail(email) || typeof password !== 'string') {
+      return res.status(400).json({ error: 'Enter your email and password.' });
+    }
+
+    const user = users.byEmail(email);
+    if (!user || !user.password_hash) {
+      await fakePasswordWork(); // keep the timing indistinguishable
+      return res.status(401).json({ error: 'Email or password is incorrect.' });
+    }
+
+    const ok = await verifyPassword(password, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Email or password is incorrect.' });
+
+    // Only revealed to someone who already proved they know the password.
+    if (!user.verified) {
+      await startVerification(email, 'signup');
+      return res.status(403).json({ error: 'Verify your email to finish setting up this account.', next: 'verify' });
+    }
+
+    await issueSession(res, user);
+    res.json({ ok: true, user: publicUser(user), progress: { unlocked: progress.get(user.id) } });
+  });
+
+// ---------------------------------------------------------------- google
+
+router.post('/auth/google',
+  sameOrigin,
+  rateLimit({ limit: 20, windowMs: 15 * 60 * 1000, keyFn: byIp }),
+  async (req, res) => {
+    if (!googleClient) return res.status(503).json({ error: 'Google sign-in is not configured on this server.' });
+    const { credential } = req.body || {};
+    if (typeof credential !== 'string' || !credential) {
+      return res.status(400).json({ error: 'Missing Google credential.' });
+    }
+
+    let payload;
+    try {
+      // Verifies signature, issuer, expiry and that the token was minted for us.
+      const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+      payload = ticket.getPayload();
+    } catch {
+      return res.status(401).json({ error: 'Could not verify that Google sign-in.' });
+    }
+
+    if (!payload?.sub || !payload.email) return res.status(401).json({ error: 'Google returned an incomplete profile.' });
+    if (!payload.email_verified) return res.status(403).json({ error: 'That Google account has an unverified email.' });
+
+    let user = users.byGoogleSub(payload.sub);
+    if (!user) {
+      const byEmail = users.byEmail(payload.email);
+      if (byEmail) {
+        // Same person arriving a second way — Google has verified the address, so
+        // adopting the existing account is safe.
+        users.linkGoogle(byEmail.id, payload.sub, payload.name || null);
+        user = users.byId(byEmail.id);
+      } else {
+        user = users.create({
+          email: payload.email,
+          googleSub: payload.sub,
+          displayName: payload.name || null,
+          verified: 1,
+        });
+      }
+    }
+
+    await issueSession(res, user);
+    res.json({ ok: true, user: publicUser(user), progress: { unlocked: progress.get(user.id) } });
+  });
+
+// ---------------------------------------------------------------- session / progress
+
+router.post('/auth/logout', sameOrigin, (req, res) => {
+  const token = readCookie(req, COOKIE);
+  if (token) sessions.destroy(hashToken(token));
+  res.clearCookie(COOKIE, { path: '/' });
+  res.json({ ok: true });
+});
+
+router.put('/progress', sameOrigin, requireUser, (req, res) => {
+  const raw = Number(req.body?.unlocked);
+  if (!Number.isInteger(raw) || raw < 0 || raw > MAX_LEVEL_INDEX) {
+    return res.status(400).json({ error: 'Invalid progress value.' });
+  }
+  res.json({ ok: true, progress: { unlocked: progress.merge(req.user.id, raw) } });
+});

@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../lib/three.module.js';
 import {
   grassSurface, lawnTileSurface, dirtSurface, brickSurface, woodSurface,
   shingleSurface, stoneSurface, clothSurface, skinSurface, barkSurface,
