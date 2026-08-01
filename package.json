@@ -6,6 +6,7 @@
   "private": true,
   "scripts": {
     "start": "node server/index.js",
+    "dev": "node server/index.js",
     "static": "npx --yes http-server -p 5173 -c-1 .",
     "test": "node test/sim.mjs && node test/auth.mjs"
   },

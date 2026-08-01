@@ -21,15 +21,15 @@ createApp().listen(port, async () => {
 
   const notes = [];
   if (SECRET_IS_EPHEMERAL) {
-    notes.push('SESSION_SECRET is unset — a random one is in use, so every restart signs everybody out.');
+    notes.push('SESSION_SECRET is unset - a random one is in use, so every restart signs everybody out.');
   }
   if (!process.env.GOOGLE_CLIENT_ID) {
-    notes.push('GOOGLE_CLIENT_ID is unset — the Google button is hidden.');
+    notes.push('GOOGLE_CLIENT_ID is unset - the Google button is hidden.');
   }
   if (!mailConfigured) {
-    notes.push('SMTP_* is unset — verification codes print to this console instead of being emailed.');
+    notes.push('SMTP_* is unset - verification codes print to this console instead of being emailed.');
   } else if (!(await verifyMailer())) {
-    notes.push('SMTP is configured but the connection test failed — codes will print here instead.');
+    notes.push('SMTP is configured but the connection test failed - codes will print here instead.');
   }
   if (notes.length) {
     console.log('  Setup notes (see .env.example):');
