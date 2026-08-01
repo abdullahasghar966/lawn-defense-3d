@@ -57,6 +57,10 @@ export function createApp({ serveStatic = true } = {}) {
 
   app.disable('x-powered-by');
 
+  // NOTE: these headers only cover responses Express produces. On Vercel the
+  // game files are served by the CDN and never reach this middleware, so the
+  // same set is duplicated in vercel.json. Change one, change the other.
+  // (vercel.json cannot carry a comment — its schema rejects unknown keys.)
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
