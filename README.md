@@ -83,7 +83,47 @@ If someone signs in with Google using an address that already has a password acc
 - Rate limiting on signup, login, verification and resend, keyed by IP **and** by IP+email so nobody can lock out someone else's account.
 - Cross-origin state-changing requests are refused, and progress is merged forward-only so a stale client can't revoke unlocked levels.
 
-Storage is SQLite via `node:sqlite`, which ships with Node — no native build, no database to run. The file lives at `data/lawn-defense.db` (gitignored).
+Storage is SQLite through the libSQL client. Locally that is a plain file at `data/lawn-defense.db` (gitignored) with nothing to install; in production it points at [Turso](https://turso.tech), which is the same SQLite speaking the same SQL over the network. One driver, one schema, one code path.
+
+## Deploying
+
+The game alone can go on any static host — it detects the missing API and runs in guest mode. To deploy it *with* working accounts:
+
+### 1. Database (required — serverless has no disk)
+
+Vercel and friends run on an ephemeral filesystem, so a local SQLite file would lose every account on each cold start. Create a free Turso database (no card needed):
+
+```
+turso db create lawn-defense
+turso db show lawn-defense --url      # -> DATABASE_URL
+turso db tokens create lawn-defense   # -> DATABASE_AUTH_TOKEN
+```
+
+### 2. Deploy
+
+Push to GitHub, import the repo at [vercel.com/new](https://vercel.com/new), and add these environment variables:
+
+| Variable | Value |
+|---|---|
+| `SESSION_SECRET` | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `DATABASE_URL` | from step 1 |
+| `DATABASE_AUTH_TOKEN` | from step 1 |
+| `GOOGLE_CLIENT_ID` | your OAuth client ID |
+| `NODE_ENV` | `production` |
+| `SMTP_*`, `MAIL_FROM` | your mail provider, so codes are actually emailed |
+
+`vercel.json` routes `/api/*` to the serverless function and serves the game files from the CDN.
+
+### 3. Make Google sign-in work for everyone
+
+Two things, both in the Google console — without them only *you* can sign in:
+
+- **Publish the app.** Under *Audience*, an app in "Testing" only admits accounts listed as test users; everyone else is blocked. Publishing needs no verification review here, because Identity Services only requests the non-sensitive `openid`, `email` and `profile` scopes.
+- **Add your deployed origin** to *Authorised JavaScript origins*, e.g. `https://your-app.vercel.app`. Google does not accept wildcards, so Vercel's per-branch preview URLs will not work with Google sign-in — only the production domain.
+
+### 4. Email
+
+Without `SMTP_*`, codes print to the server log, which nobody but you can read. Real signups need a real mail provider.
 
 ## Test it
 

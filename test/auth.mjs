@@ -15,7 +15,8 @@ process.env.NODE_ENV = 'test';
 delete process.env.GOOGLE_CLIENT_ID;
 
 const { createApp } = await import('../server/app.js');
-const { otps, users } = await import('../server/db.js');
+const { otps, users, ready } = await import('../server/db.js');
+await ready();
 const { hashOtp } = await import('../server/security.js');
 
 let pass = 0, fail = 0;
@@ -54,8 +55,8 @@ function jar() {
 }
 
 /** Replaces whatever code was mailed with one the test knows. */
-function plantCode(email, code = '123456') {
-  otps.put(email, hashOtp(code), 'signup', 10 * 60 * 1000);
+async function plantCode(email, code = '123456') {
+  await otps.put(email, hashOtp(code), 'signup', 10 * 60 * 1000);
   return code;
 }
 
@@ -69,7 +70,7 @@ console.log('1. Signup issues a code and does not sign you in yet');
   check('no session cookie before verification', c.header === '');
   const me = await c.call('/api/me');
   check('/me is anonymous', me.data.user === null);
-  check('account exists but is unverified', users.byEmail('a@example.com')?.verified === 0);
+  check('account exists but is unverified', (await users.byEmail('a@example.com'))?.verified === 0);
 }
 
 console.log('2. Weak input is rejected');
@@ -87,7 +88,7 @@ console.log('3. Verification: wrong code fails, right code signs you in');
 {
   const c = jar();
   await c.call('/api/auth/signup', { method: 'POST', body: { email: 'v@example.com', password: PW } });
-  plantCode('v@example.com', '654321');
+  await plantCode('v@example.com', '654321');
   const wrong = await c.call('/api/auth/verify', { method: 'POST', body: { email: 'v@example.com', code: '000000' } });
   check('wrong code rejected', wrong.status === 400);
   check('still no session', c.header === '');
@@ -104,18 +105,18 @@ console.log('4. Codes expire and burn out after repeated guesses');
 {
   const c = jar();
   await c.call('/api/auth/signup', { method: 'POST', body: { email: 'e@example.com', password: PW } });
-  otps.put('e@example.com', hashOtp('111111'), 'signup', -1000); // already expired
+  await otps.put('e@example.com', hashOtp('111111'), 'signup', -1000); // already expired
   const expired = await c.call('/api/auth/verify', { method: 'POST', body: { email: 'e@example.com', code: '111111' } });
   check('expired code rejected', expired.status === 400);
 
-  plantCode('x@example.com', '222222');
+  await plantCode('x@example.com', '222222');
   let lastStatus = 0;
   for (let i = 0; i < 6; i++) {
     const r = await c.call('/api/auth/verify', { method: 'POST', body: { email: 'x@example.com', code: '999999' } });
     lastStatus = r.status;
   }
   check('repeated wrong guesses stop being accepted', lastStatus === 400 || lastStatus === 429);
-  check('burnt code is discarded', otps.get('x@example.com') === undefined);
+  check('burnt code is discarded', (await otps.get('x@example.com')) === undefined);
 }
 
 console.log('5. Login');
@@ -148,9 +149,9 @@ console.log('6. Unverified accounts are routed back to verification');
 console.log('7. Signup cannot be used to discover existing accounts');
 {
   const c = jar();
-  const before = users.byEmail('v@example.com').password_hash;
+  const before = (await users.byEmail('v@example.com')).password_hash;
   const r = await c.call('/api/auth/signup', { method: 'POST', body: { email: 'v@example.com', password: 'attackerPass9' } });
-  const after = users.byEmail('v@example.com').password_hash;
+  const after = (await users.byEmail('v@example.com')).password_hash;
   check('response is the same as a fresh signup', r.status === 200 && r.data.next === 'verify');
   check('existing password is NOT overwritten', before === after);
 }
@@ -220,7 +221,7 @@ console.log('11. With a client ID configured, Google tokens are actually verifie
   const r = await c.call('/api/auth/google', { method: 'POST', body: { credential: forged } });
   check('a self-signed token is refused', r.status === 401);
   check('no session was handed out', c.header === '');
-  check('and no account was created from it', users.byEmail('attacker@example.com') === undefined);
+  check('and no account was created from it', (await users.byEmail('attacker@example.com')) === undefined);
 
   delete process.env.GOOGLE_CLIENT_ID;
   const after = await c.call('/api/config');

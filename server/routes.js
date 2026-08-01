@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { OAuth2Client } from 'google-auth-library';
-import { users, otps, sessions, progress } from './db.js';
+import { users, otps, sessions, progress, maybeSweep } from './db.js';
 import { sendOtpEmail, mailConfigured } from './mailer.js';
 import { rateLimit, byIp, byIpAndEmail } from './ratelimit.js';
 import {
@@ -52,13 +52,19 @@ function readCookie(req, name) {
 }
 
 /** Resolves req.user from the session cookie. Never throws; anonymous is fine. */
-export function loadSession(req, res, next) {
+export async function loadSession(req, res, next) {
   req.user = null;
-  const token = readCookie(req, COOKIE);
-  if (token) {
-    const row = sessions.get(hashToken(token));
-    if (row) req.user = users.byId(row.user_id) || null;
-    else res.clearCookie(COOKIE, { path: '/' });
+  try {
+    const token = readCookie(req, COOKIE);
+    if (token) {
+      const row = await sessions.get(hashToken(token));
+      if (row) req.user = (await users.byId(row.user_id)) || null;
+      else res.clearCookie(COOKIE, { path: '/' });
+    }
+    void maybeSweep();
+  } catch (err) {
+    // A storage blip should degrade to "signed out", not a 500 on every page.
+    console.error('Session lookup failed:', err.message);
   }
   next();
 }
@@ -96,13 +102,13 @@ const publicUser = (u) => ({
 
 async function issueSession(res, user) {
   const { token, hash } = newSessionToken();
-  sessions.create(hash, user.id, SESSION_TTL_MS);
+  await sessions.create(hash, user.id, SESSION_TTL_MS);
   setSessionCookie(res, token);
 }
 
 async function startVerification(email, purpose) {
   const { code, hash } = newOtp();
-  otps.put(email, hash, purpose, OTP_TTL_MS);
+  await otps.put(email, hash, purpose, OTP_TTL_MS);
   await sendOtpEmail(email, code);
 }
 
@@ -120,9 +126,9 @@ router.get('/config', (req, res) => {
   });
 });
 
-router.get('/me', (req, res) => {
+router.get('/me', async (req, res) => {
   if (!req.user) return res.json({ user: null, progress: { unlocked: 0 } });
-  res.json({ user: publicUser(req.user), progress: { unlocked: progress.get(req.user.id) } });
+  res.json({ user: publicUser(req.user), progress: { unlocked: await progress.get(req.user.id) } });
 });
 
 // ---------------------------------------------------------------- signup
@@ -137,7 +143,7 @@ router.post('/auth/signup',
     const problem = passwordProblem(password);
     if (problem) return res.status(400).json({ error: problem });
 
-    const existing = users.byEmail(email);
+    const existing = await users.byEmail(email);
 
     // An address that already has a finished account is never confirmed or denied
     // here — the response below is identical either way, so this endpoint cannot
@@ -147,8 +153,8 @@ router.post('/auth/signup',
     }
 
     const passwordHash = await hashPassword(password);
-    if (existing) users.setPassword(existing.id, passwordHash);
-    else users.create({ email, passwordHash, verified: 0 });
+    if (existing) await users.setPassword(existing.id, passwordHash);
+    else await users.create({ email, passwordHash, verified: 0 });
 
     await startVerification(email, 'signup');
     res.json({ ok: true, next: 'verify', message: 'Check your email for a 6-digit code.' });
@@ -163,31 +169,32 @@ router.post('/auth/verify',
       return res.status(400).json({ error: 'Enter the 6-digit code we emailed you.' });
     }
 
-    const record = otps.get(email);
+    const record = await otps.get(email);
     if (!record) return res.status(400).json({ error: 'That code has expired. Request a new one.' });
     if (record.expires_at <= Date.now()) {
-      otps.clear(email);
+      await otps.clear(email);
       return res.status(400).json({ error: 'That code has expired. Request a new one.' });
     }
     if (record.attempts >= OTP_MAX_ATTEMPTS) {
-      otps.clear(email);
+      await otps.clear(email);
       return res.status(429).json({ error: 'Too many wrong codes. Request a new one.' });
     }
     if (!otpMatches(code.trim(), record.code_hash)) {
-      otps.bumpAttempts(email);
+      await otps.bumpAttempts(email);
       return res.status(400).json({ error: 'That code is not right.' });
     }
 
-    const user = users.byEmail(email);
+    const user = await users.byEmail(email);
     if (!user) {
-      otps.clear(email);
+      await otps.clear(email);
       return res.status(400).json({ error: 'That code has expired. Request a new one.' });
     }
 
-    otps.clear(email);
-    users.markVerified(user.id);
-    await issueSession(res, users.byId(user.id));
-    res.json({ ok: true, user: publicUser(users.byId(user.id)), progress: { unlocked: progress.get(user.id) } });
+    await otps.clear(email);
+    await users.markVerified(user.id);
+    const fresh = await users.byId(user.id);
+    await issueSession(res, fresh);
+    res.json({ ok: true, user: publicUser(fresh), progress: { unlocked: await progress.get(user.id) } });
   });
 
 router.post('/auth/resend',
@@ -197,13 +204,13 @@ router.post('/auth/resend',
     const { email } = req.body || {};
     if (!validEmail(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
 
-    const existing = otps.get(email);
+    const existing = await otps.get(email);
     if (existing && Date.now() - existing.sent_at < OTP_RESEND_COOLDOWN_MS) {
       const wait = Math.ceil((OTP_RESEND_COOLDOWN_MS - (Date.now() - existing.sent_at)) / 1000);
       return res.status(429).json({ error: `Please wait ${wait}s before requesting another code.` });
     }
 
-    const user = users.byEmail(email);
+    const user = await users.byEmail(email);
     // Same response whether or not there is anything to send.
     if (user && !user.verified) await startVerification(email, 'signup');
     res.json({ ok: true, message: 'If that address needs verifying, a new code is on its way.' });
@@ -221,7 +228,7 @@ router.post('/auth/login',
       return res.status(400).json({ error: 'Enter your email and password.' });
     }
 
-    const user = users.byEmail(email);
+    const user = await users.byEmail(email);
     if (!user || !user.password_hash) {
       await fakePasswordWork(); // keep the timing indistinguishable
       return res.status(401).json({ error: 'Email or password is incorrect.' });
@@ -237,7 +244,7 @@ router.post('/auth/login',
     }
 
     await issueSession(res, user);
-    res.json({ ok: true, user: publicUser(user), progress: { unlocked: progress.get(user.id) } });
+    res.json({ ok: true, user: publicUser(user), progress: { unlocked: await progress.get(user.id) } });
   });
 
 // ---------------------------------------------------------------- google
@@ -265,16 +272,16 @@ router.post('/auth/google',
     if (!payload?.sub || !payload.email) return res.status(401).json({ error: 'Google returned an incomplete profile.' });
     if (!payload.email_verified) return res.status(403).json({ error: 'That Google account has an unverified email.' });
 
-    let user = users.byGoogleSub(payload.sub);
+    let user = await users.byGoogleSub(payload.sub);
     if (!user) {
-      const byEmail = users.byEmail(payload.email);
+      const byEmail = await users.byEmail(payload.email);
       if (byEmail) {
         // Same person arriving a second way — Google has verified the address, so
         // adopting the existing account is safe.
-        users.linkGoogle(byEmail.id, payload.sub, payload.name || null);
-        user = users.byId(byEmail.id);
+        await users.linkGoogle(byEmail.id, payload.sub, payload.name || null);
+        user = await users.byId(byEmail.id);
       } else {
-        user = users.create({
+        user = await users.create({
           email: payload.email,
           googleSub: payload.sub,
           displayName: payload.name || null,
@@ -284,22 +291,22 @@ router.post('/auth/google',
     }
 
     await issueSession(res, user);
-    res.json({ ok: true, user: publicUser(user), progress: { unlocked: progress.get(user.id) } });
+    res.json({ ok: true, user: publicUser(user), progress: { unlocked: await progress.get(user.id) } });
   });
 
 // ---------------------------------------------------------------- session / progress
 
-router.post('/auth/logout', sameOrigin, (req, res) => {
+router.post('/auth/logout', sameOrigin, async (req, res) => {
   const token = readCookie(req, COOKIE);
-  if (token) sessions.destroy(hashToken(token));
+  if (token) await sessions.destroy(hashToken(token));
   res.clearCookie(COOKIE, { path: '/' });
   res.json({ ok: true });
 });
 
-router.put('/progress', sameOrigin, requireUser, (req, res) => {
+router.put('/progress', sameOrigin, requireUser, async (req, res) => {
   const raw = Number(req.body?.unlocked);
   if (!Number.isInteger(raw) || raw < 0 || raw > MAX_LEVEL_INDEX) {
     return res.status(400).json({ error: 'Invalid progress value.' });
   }
-  res.json({ ok: true, progress: { unlocked: progress.merge(req.user.id, raw) } });
+  res.json({ ok: true, progress: { unlocked: await progress.merge(req.user.id, raw) } });
 });

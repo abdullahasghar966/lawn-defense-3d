@@ -13,7 +13,8 @@ if (process.env.NODE_ENV === 'production') {
   process.exit(1);
 }
 
-const { users, otps, db } = await import('../server/db.js');
+const { users, otps, client, ready } = await import('../server/db.js');
+await ready();
 const { newOtp, OTP_TTL_MS, SECRET_IS_EPHEMERAL } = await import('../server/security.js');
 
 const args = process.argv.slice(2);
@@ -21,7 +22,7 @@ const email = args.find((a) => !a.startsWith('--'));
 const wantVerify = args.includes('--verify');
 
 if (args.includes('--list') || !email) {
-  const rows = db.prepare('SELECT email, verified, google_sub FROM users ORDER BY created_at').all();
+  const rows = (await client.execute('SELECT email, verified, google_sub FROM users ORDER BY created_at')).rows;
   if (!rows.length) {
     console.log('No accounts yet.');
   } else {
@@ -37,15 +38,15 @@ if (args.includes('--list') || !email) {
   process.exit(0);
 }
 
-const user = users.byEmail(email);
+const user = await users.byEmail(email);
 if (!user) {
   console.error(`No account for ${email}. Sign up in the browser first.`);
   process.exit(1);
 }
 
 if (wantVerify) {
-  users.markVerified(user.id);
-  otps.clear(email);
+  await users.markVerified(user.id);
+  await otps.clear(email);
   console.log(`\n  ${email} is now verified. Sign in with your password.\n`);
   process.exit(0);
 }
@@ -67,6 +68,6 @@ if (SECRET_IS_EPHEMERAL) {
 }
 
 const { code, hash } = newOtp();
-otps.put(email, hash, 'signup', OTP_TTL_MS);
+await otps.put(email, hash, 'signup', OTP_TTL_MS);
 console.log(`\n  Verification code for ${email}: ${code}`);
 console.log('  Valid for 10 minutes.\n');
