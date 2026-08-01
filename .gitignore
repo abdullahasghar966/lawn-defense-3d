@@ -3,3 +3,12 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.log
+
+# Secrets and local state — never commit these
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.db-wal
+*.db-shm

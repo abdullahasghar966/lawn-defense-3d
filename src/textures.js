@@ -3,7 +3,7 @@
 // zombie skin — is generated here as an albedo + normal pair. Node has no canvas, so
 // every entry point returns null when there is no DOM and materials fall back to flat
 // colours (that is the path the headless sim in test/sim.mjs takes).
-import * as THREE from 'three';
+import * as THREE from '../lib/three.module.js';
 
 const hasDOM = typeof document !== 'undefined';
 const cache = new Map();
