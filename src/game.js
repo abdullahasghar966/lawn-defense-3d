@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import {
   COLS, ROWS, TILE, boardX, boardZ,
   ZOMBIE_SPAWN_X, MOWER_X, HOUSE_X,
-  PLANTS, SUN_VALUE, SKY_SUN_INTERVAL, THEMES,
+  PLANTS, SUN_VALUE, SKY_SUN_INTERVAL, THEMES, BREACH_DURATION,
 } from './constants.js';
 import { PLANT_BUILDERS, buildTile, buildZombie, buildSun, buildMower, buildScenery } from './models.js';
+import { skyEquirect } from './textures.js';
 import { Plant, Zombie, Projectile, Lob, Sun, Mower } from './entities.js';
 import { Particles } from './particles.js';
 import { LEVELS } from './levels.js';
@@ -71,41 +72,61 @@ export class Game {
   initScene() {
     const th = this.theme;
     this.scene = new THREE.Scene();
-    const skyCanvas = document.createElement('canvas');
-    skyCanvas.width = 2;
-    skyCanvas.height = 256;
-    const skyCtx = skyCanvas.getContext('2d');
-    const grad = skyCtx.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, th.skyTop);
-    grad.addColorStop(1, th.skyBottom);
-    skyCtx.fillStyle = grad;
-    skyCtx.fillRect(0, 0, 2, 256);
-    const skyTex = new THREE.CanvasTexture(skyCanvas);
-    skyTex.colorSpace = THREE.SRGBColorSpace;
-    this.scene.background = skyTex;
-    this.scene.fog = new THREE.Fog(new THREE.Color(th.skyBottom), 24, th.fogFar);
 
-    this.camera = new THREE.PerspectiveCamera(46, innerWidth / innerHeight, 0.1, 100);
+    this.camera = new THREE.PerspectiveCamera(46, innerWidth / innerHeight, 0.1, 120);
     this.camBase = new THREE.Vector3(0.4, 9.2, 8.6);
+    this.camLookBase = new THREE.Vector3(0, 0, 0.4);
     this.camera.position.copy(this.camBase);
-    this.camera.lookAt(0, 0, 0.4);
+    this.camera.lookAt(this.camLookBase);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Filmic tonemapping is what stops the bright lawn from clipping to flat white
+    // and gives the highlights the roll-off a rendered still has.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = th.exposure;
+    this.baseExposure = th.exposure;
     this.container.prepend(this.renderer.domElement);
 
+    // The sky serves double duty: visible background and, through PMREM, the
+    // image-based light that gives every material its ambient reflection.
+    const sky = skyEquirect(th);
+    if (sky) {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      this.envRT = pmrem.fromEquirectangular(sky);
+      this.scene.environment = this.envRT.texture;
+      this.scene.background = sky;
+      pmrem.dispose();
+    } else {
+      this.scene.background = new THREE.Color(th.skyBottom);
+    }
+    this.scene.fog = new THREE.Fog(new THREE.Color(th.fogColor), th.fogNear, th.fogFar);
+
     this.scene.add(new THREE.AmbientLight(0xffffff, th.ambient));
-    this.scene.add(new THREE.HemisphereLight(0xbde8ff, 0x4e7a32, 0.3));
+    this.scene.add(new THREE.HemisphereLight(th.hemiSky, th.hemiGround, th.hemiIntensity));
+
     const sunLight = new THREE.DirectionalLight(th.sunColor, th.sunIntensity);
-    sunLight.position.set(6, 12, 5);
+    sunLight.position.set(...th.sunPos);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.set(2048, 2048);
     const sc = sunLight.shadow.camera;
-    sc.left = -10; sc.right = 10; sc.top = 8; sc.bottom = -8;
+    sc.left = -13; sc.right = 13; sc.top = 11; sc.bottom = -11;
+    sc.near = 0.5; sc.far = 42;
+    sunLight.shadow.bias = -0.0006;
+    sunLight.shadow.normalBias = 0.022;
+    sunLight.shadow.radius = 2.2;
     this.scene.add(sunLight);
+    this.sunLight = sunLight;
+
+    // Cool bounce from the opposite side so shadowed faces keep their form.
+    const fill = new THREE.DirectionalLight(th.hemiSky, th.sunIntensity * 0.16);
+    fill.position.set(-8, 5, -6);
+    this.scene.add(fill);
+    this.fillLight = fill;
 
     addEventListener('resize', () => {
       this.camera.aspect = innerWidth / innerHeight;
@@ -134,7 +155,7 @@ export class Game {
       this.scene.add(mower.mesh);
       this.mowers.push(mower);
     }
-    buildScenery(this.scene, boardX(0) - 0.6, boardX(COLS - 1) + 0.6, ROWS * TILE, this.theme);
+    this.scenery = buildScenery(this.scene, boardX(0) - 0.6, boardX(COLS - 1) + 0.6, ROWS * TILE, this.theme);
   }
 
   initInput() {
@@ -163,6 +184,8 @@ export class Game {
       banner: document.getElementById('banner'),
       overlay: document.getElementById('overlay'),
       shovelBtn: document.getElementById('shovel-btn'),
+      vignette: document.getElementById('breach-vignette'),
+      fade: document.getElementById('fade'),
     };
     this.cards = [];
     this.hud.shovelBtn.addEventListener('click', () => {
@@ -508,6 +531,152 @@ export class Game {
     this.bannerT = setTimeout(() => b.classList.remove('show'), ms);
   }
 
+  /**
+   * A zombie got past the last mower. Instead of cutting straight to the defeat
+   * screen, hand control to a scripted shot: the zombie crosses to the front door,
+   * tears it open, steps into the dark, and something in there screams.
+   */
+  beginBreach(zombie) {
+    if (this.breach) return;
+    this.status = 'breach';
+    this.select(null);
+    this.setShovel(false);
+    if (this.ghost) { this.scene.remove(this.ghost); this.ghost = null; }
+
+    const doorX = this.scenery ? this.scenery.doorWorldX : HOUSE_X;
+    this.breach = {
+      t: 0,
+      zombie,
+      doorX,
+      fromX: zombie.x,
+      fromZ: zombie.z,
+      camFrom: this.camera.position.clone(),
+      camTo: new THREE.Vector3(doorX + 3.5, 2.15, 2.95),
+      lookFrom: this.camLookBase.clone(),
+      lookTo: new THREE.Vector3(doorX + 0.1, 1.02, -0.05),
+      look: this.camLookBase.clone(),
+      stages: {},
+    };
+    zombie.state = 'BREACH';
+    this.hud.bar.classList.add('dimmed');
+    this.hud.banner.classList.remove('show');
+    clearTimeout(this.bannerT);
+    sfx.heartbeat(0);
+    sfx.heartbeat(0.95);
+  }
+
+  updateBreach(dt) {
+    const b = this.breach;
+    b.t += dt;
+    const t = b.t;
+    const z = b.zombie;
+    const s = this.scenery;
+    const ease = (k) => (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
+    const clamp01 = (k) => Math.min(1, Math.max(0, k));
+    const once = (key, fn) => { if (!b.stages[key]) { b.stages[key] = true; fn(); } };
+
+    const porchX = b.doorX + 0.66;
+
+    // ---- zombie: cross to the door, hammer on it, then walk into the dark
+    if (t < 1.15) {
+      const k = ease(clamp01(t / 1.15));
+      z.x = b.fromX + (porchX - b.fromX) * k;
+      z.z = b.fromZ + (0 - b.fromZ) * k;
+      z.walkPhase += dt * 6;
+      z.animateWalk(z.walkPhase, z.mesh.userData.limbs);
+    } else if (t < 1.9) {
+      // pounding on the door
+      const k = (t - 1.15) / 0.75;
+      const limbs = z.mesh.userData.limbs;
+      const swing = Math.sin(k * Math.PI * 3);
+      if (limbs.armL) limbs.armL.rotation.z = 0.5 + swing * 0.8;
+      if (limbs.armR) limbs.armR.rotation.z = 0.5 - swing * 0.8;
+      z.x = porchX + Math.abs(swing) * 0.06;
+    } else {
+      const k = ease(clamp01((t - 1.9) / 1.0));
+      z.x = porchX - 1.45 * k;
+      const limbs = z.mesh.userData.limbs;
+      z.walkPhase += dt * 5;
+      z.animateWalk(z.walkPhase, limbs);
+      // arms up and groping as it goes in
+      if (limbs.armL) limbs.armL.rotation.z = 0.9 + Math.sin(t * 9) * 0.25;
+      if (limbs.armR) limbs.armR.rotation.z = 0.9 - Math.sin(t * 9) * 0.25;
+    }
+    z.mesh.position.set(z.x, z.mesh.position.y, z.z);
+
+    // ---- door: two knocks, then it goes in
+    if (t >= 1.2) once('knock', () => sfx.doorSlam());
+    if (t >= 1.5 && s && s.door) {
+      once('burst', () => {
+        sfx.doorBurst();
+        this.shake(0.55, 0.55);
+        this.particles.burst(b.doorX + 0.1, 1.0, 0, { color: 0x8a5f34, count: 26, speed: 3.4, life: 0.8, size: 1.2 });
+        this.particles.burst(b.doorX + 0.1, 1.4, 0, { color: 0xc4a074, count: 14, speed: 2.6, life: 0.7 });
+      });
+      // slams open past its stop and rebounds
+      const k = clamp01((t - 1.5) / 0.45);
+      const over = Math.sin(ease(k) * Math.PI * 0.5) * 2.15 - Math.max(0, k - 0.8) * 0.9;
+      s.door.rotation.y = -over;
+    }
+
+    // ---- the house reacts
+    if (s && s.interiorLight) {
+      if (t >= 1.5 && t < 2.25) s.interiorLight.intensity = 1.4;
+      else if (t >= 2.25) {
+        // red flare, guttering
+        s.interiorLight.intensity = 14 * Math.max(0, 1 - (t - 2.25) / 1.4) * (0.65 + 0.35 * Math.sin(t * 27));
+      }
+    }
+    if (t >= 2.25) {
+      once('scream', () => {
+        sfx.scream();
+        sfx.screamFar(0.42);
+        this.shake(0.4, 0.9);
+        if (s && s.porchLight) {
+          s.porchLight.material.emissiveIntensity = 0;
+          if (s.porchLampLight) s.porchLampLight.intensity = 0;
+        }
+      });
+      const flare = Math.max(0, 1 - (t - 2.25) / 1.3);
+      for (const w of (s ? s.windows : [])) {
+        w.material.emissive.setRGB(1, 0.08, 0.03);
+        w.material.emissiveIntensity = flare * (1.6 + Math.sin(t * 23) * 0.7);
+      }
+      this.renderer.toneMappingExposure = this.baseExposure * (1 + flare * 0.22);
+    }
+    if (t >= 2.7) once('crunch', () => sfx.crunch());
+    if (t >= 3.15) once('crunch2', () => sfx.crunch(0.05));
+
+    // ---- camera: push in on the porch, then a slow creep during the scream
+    const push = ease(clamp01(t / 1.5));
+    const creep = clamp01((t - 1.5) / 2.4) * 0.5;
+    const pos = b.camFrom.clone().lerp(b.camTo, push);
+    pos.lerp(b.camTo.clone().lerp(b.lookTo, 0.22), creep);
+    b.look.lerpVectors(b.lookFrom, b.lookTo, push);
+    if (this.shakeT < this.shakeDur) {
+      this.shakeT += dt;
+      const k = 1 - this.shakeT / this.shakeDur;
+      pos.x += (Math.random() - 0.5) * this.shakeAmp * k;
+      pos.y += (Math.random() - 0.5) * this.shakeAmp * k * 0.7;
+    }
+    this.camera.position.copy(pos);
+    this.camera.lookAt(b.look);
+
+    // ---- grade: red vignette pulls in, then black
+    if (this.hud.vignette) {
+      const v = t < 2.25 ? clamp01(t / 2.25) * 0.45 : 0.45 + clamp01((t - 2.25) / 0.35) * 0.55;
+      this.hud.vignette.style.opacity = String(v);
+    }
+    if (this.hud.fade && t >= 2.85) {
+      this.hud.fade.style.opacity = String(clamp01((t - 2.85) / 1.15) * 0.92);
+    }
+
+    if (t >= BREACH_DURATION) {
+      this.breach = null;
+      this.endGame(false);
+    }
+  }
+
   endGame(won) {
     this.status = won ? 'won' : 'lost';
     if (won) sfx.victory(); else sfx.defeat();
@@ -527,7 +696,7 @@ export class Game {
     const hasNext = won && this.levelIndex < LEVELS.length - 1;
     o.innerHTML = `
       <h1 class="menu-title ${won ? '' : 'lost'}">${won ? 'Level complete!' : 'The zombies ate your brains'}</h1>
-      <p class="menu-sub">${won ? unlockedMsg : 'A zombie reached the house. Try a different defense.'}</p>
+      <p class="menu-sub">${won ? unlockedMsg : 'One got through the front door. Try a different defense.'}</p>
       <div class="end-btns">
         ${hasNext ? '<button id="btn-next">Next level</button>' : ''}
         <button id="btn-retry">${won ? 'Replay' : 'Retry'}</button>
@@ -544,6 +713,12 @@ export class Game {
       const t = performance.now() * 0.0001;
       this.camera.position.set(this.camBase.x + Math.sin(t) * 0.6, this.camBase.y, this.camBase.z);
       this.camera.lookAt(0, 0, 0.4);
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+    if (this.status === 'breach') {
+      this.updateBreach(dt);
+      this.particles.update(dt);
       this.renderer.render(this.scene, this.camera);
       return;
     }
@@ -595,7 +770,9 @@ export class Game {
       if (z.x < MOWER_X + 0.35) {
         const mower = this.mowers.find((m) => m.row === z.row && !m.active && !m.gone);
         if (mower) { mower.active = true; sfx.mower(); }
-        else if (z.x < HOUSE_X) { this.endGame(false); return; }
+        // Hand over to the cinematic as soon as the lane is lost, rather than
+        // letting the zombie march the last stretch nose-first into the brickwork.
+        else if (z.x < MOWER_X + 0.1) { this.beginBreach(z); return; }
       }
     }
 
