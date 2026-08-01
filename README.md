@@ -128,10 +128,3 @@ The lawn is a `Grid[5][9]` matrix; combat is lane-scoped. Plant behaviors are da
 ## Disclaimer
 
 This is a non-commercial fan project built to learn grid mechanics, state machines, and real-time 3D. It is not affiliated with, endorsed by, or connected to PopCap Games or Electronic Arts. All code and art here are original — every model is built from Three.js primitives at runtime; no assets from any commercial game are used or redistributed. Plant and zombie archetype names are used descriptively to reference the genre this project studies.
-
-## Roadmap (from the crazy-ideas session)
-
-1. AI Director — subagent designs waves that counter your playstyle
-2. Excel-as-level-editor — design waves in a spreadsheet, convert to level data
-3. Claude the playtester — automated browser playthroughs with balance reports
-4. Nightly balance patch — telemetry + scheduled tuning
