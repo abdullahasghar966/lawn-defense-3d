@@ -5,7 +5,6 @@
   ],
   "headers": [
     {
-      "//": "Static files come from Vercel's CDN, not Express, so the security headers set in server/app.js never run for them. They are repeated here. Keep the two in sync.",
       "source": "/(.*)",
       "headers": [
         { "key": "X-Content-Type-Options", "value": "nosniff" },
