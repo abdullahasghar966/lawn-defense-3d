@@ -10,6 +10,18 @@ npm install && npm start
 
 Then open http://localhost:5173. There is still no build step — the game is plain ES modules and Three.js is vendored in `lib/`. The install is for the server (accounts and saved progress).
 
+**On Windows PowerShell**, `npm` may fail with *"npm.ps1 cannot be loaded because running scripts is disabled"*. That is Windows blocking npm's PowerShell launcher, not a problem with Node or this project — it affects every npm command on the machine. Either use the batch launcher:
+
+```
+.\dev.cmd
+```
+
+or call npm's batch wrapper directly (`npm.cmd run dev`), or allow local scripts once, per-user, no admin needed:
+
+```
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
 Prefer to skip the backend entirely? The game is happy as a static site:
 
 ```
