@@ -13,6 +13,14 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
+// Serverless platforms give you a read-only filesystem, so falling back to a
+// local SQLite file there cannot work — and must not be discovered as an
+// EROFS crash at import time, which takes down every route including the ones
+// that would explain the problem.
+export const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY);
+export const usingRemoteDb = !!process.env.DATABASE_URL;
+export const storageConfigured = usingRemoteDb || !isServerless;
+
 function resolveUrl() {
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
   const file = process.env.DB_FILE || join(root, 'data', 'lawn-defense.db');
@@ -20,12 +28,25 @@ function resolveUrl() {
   return `file:${file}`;
 }
 
-export const client = createClient({
-  url: resolveUrl(),
-  authToken: process.env.DATABASE_AUTH_TOKEN,
-});
+// Built on first use, so a misconfigured deployment surfaces as a clear error
+// from the endpoints that need storage rather than a dead function.
+let cached = null;
+function getClient() {
+  if (!storageConfigured) {
+    throw new Error(
+      'DATABASE_URL is not set. Serverless hosts have no writable disk, so a ' +
+      'hosted database is required — see the deployment section of the README.'
+    );
+  }
+  if (!cached) {
+    cached = createClient({ url: resolveUrl(), authToken: process.env.DATABASE_AUTH_TOKEN });
+  }
+  return cached;
+}
 
-export const usingRemoteDb = !!process.env.DATABASE_URL;
+export const client = {
+  execute: (...args) => getClient().execute(...args),
+};
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS users (

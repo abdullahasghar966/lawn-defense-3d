@@ -13,6 +13,7 @@ export const state = {
   online: false,       // did the API answer at all
   googleClientId: '',
   emailDelivery: false,
+  storage: true,       // API has a working database behind it
   dev: false,          // server is not in production; safe to surface setup hints
 };
 
@@ -52,16 +53,27 @@ export const setGuest = (on) => {
 /** Called once at boot. Resolves even when the backend is missing. */
 export async function loadSession() {
   state.unlocked = localUnlocked();
+
+  // /config is the liveness probe: it touches no storage, so it answers even on
+  // a half-configured deployment. Only if *this* fails is there truly no API.
   try {
-    const [me, config] = await Promise.all([api('/me'), api('/config')]);
+    const config = await api('/config');
     state.online = true;
     state.googleClientId = config.googleClientId || '';
     state.emailDelivery = !!config.emailDelivery;
+    state.storage = config.storage !== false;
     state.dev = !!config.dev;
-    applyAuth(me);
   } catch {
-    // No backend — pure guest mode against localStorage.
     state.online = false;
+    state.user = null;
+    return state;
+  }
+
+  // A failure here means "not signed in", not "no backend" — don't let a
+  // storage problem silently hide the whole sign-in screen.
+  try {
+    applyAuth(await api('/me'));
+  } catch {
     state.user = null;
   }
   return state;

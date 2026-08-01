@@ -232,6 +232,11 @@ function render({ dismissible }) {
       className: 'auth-devhint',
       textContent: 'No game server detected — accounts are unavailable, but you can still play as a guest.',
     }));
+  } else if (!state.storage) {
+    card.append(el('p', {
+      className: 'auth-devhint',
+      textContent: 'This deployment has no database configured, so accounts cannot be saved. Set DATABASE_URL — see the README. You can still play as a guest.',
+    }));
   }
 
   root.append(card);

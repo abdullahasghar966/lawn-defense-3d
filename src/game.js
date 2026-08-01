@@ -254,7 +254,9 @@ export class Game {
     const bar = document.getElementById('account-bar');
     if (!bar) return;
     if (!session.online) {
-      bar.innerHTML = '<span class="acct-who">Offline — progress saved on this device</span>';
+      // Most likely a static-only deploy with no API behind it. Say so, rather
+      // than leaving the missing sign-in button unexplained.
+      bar.innerHTML = '<span class="acct-who">No server — progress saved on this device only</span>';
       return;
     }
     if (session.user) {

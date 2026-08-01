@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { OAuth2Client } from 'google-auth-library';
-import { users, otps, sessions, progress, maybeSweep } from './db.js';
+import { users, otps, sessions, progress, maybeSweep, storageConfigured } from './db.js';
 import { sendOtpEmail, mailConfigured } from './mailer.js';
 import { rateLimit, byIp, byIpAndEmail } from './ratelimit.js';
 import {
@@ -119,9 +119,12 @@ router.get('/config', (req, res) => {
   // `dev` lets the sign-in screen explain missing setup instead of silently
   // hiding features. Never sent in production, where players would just be
   // reading someone else's TODO list.
+  // Deliberately touches no storage, so it still answers on a misconfigured
+  // deployment — that is what tells the client the API exists at all.
   res.json({
     googleClientId: googleClientId(),
     emailDelivery: mailConfigured,
+    storage: storageConfigured,
     dev: !isProd(),
   });
 });
