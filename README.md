@@ -30,6 +30,18 @@ It runs with **no configuration at all**: verification codes print to the server
 
 `.env` is gitignored. Don't commit real values.
 
+### Getting unstuck in development
+
+Without SMTP the six-digit code is printed to the server console, not emailed. If you lose it, or you restarted the server (which invalidates pending codes unless `SESSION_SECRET` is set):
+
+```
+node scripts/dev-account.mjs --list                    # who exists, and who is verified
+node scripts/dev-account.mjs you@example.com --verify  # skip the code entirely
+node scripts/dev-account.mjs you@example.com           # mint a fresh code
+```
+
+It needs direct access to the SQLite file, so it is not a way around the login from anywhere but your own machine, and it refuses to run with `NODE_ENV=production`. Minting a code also requires `SESSION_SECRET` to be set, since codes are signed with it.
+
 ### How the auth is built
 
 - Passwords hashed with **scrypt** (`node:crypto`), random per-user salt, constant-time compare. A decoy hash runs when the account doesn't exist so timing can't reveal which addresses are registered.

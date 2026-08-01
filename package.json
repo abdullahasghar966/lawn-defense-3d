@@ -8,6 +8,7 @@
     "start": "node server/index.js",
     "dev": "node server/index.js",
     "static": "npx --yes http-server -p 5173 -c-1 .",
+    "account": "node scripts/dev-account.mjs",
     "test": "node test/sim.mjs && node test/auth.mjs"
   },
   "license": "MIT",
