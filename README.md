@@ -91,10 +91,10 @@ Storage is SQLite via `node:sqlite`, which ships with Node — no native build, 
 npm test
 ```
 
-Two suites, 86 checks total:
+Two suites, 93 checks total:
 
 - `test/sim.mjs` (52) — headless simulation of every combat mechanic: rage mode, vaulting, shields, torchwood fire peas, boss smash/imp throw, breach handoff, campaign data integrity.
-- `test/auth.mjs` (34) — boots the real Express app against a throwaway database: signup, code expiry and burnout, login, account-enumeration resistance, session lifecycle, forward-only progress, cross-origin refusal, and rate limiting.
+- `test/auth.mjs` (41) — boots the real Express app against a throwaway database: signup, code expiry and burnout, login, account-enumeration resistance, session lifecycle, forward-only progress, cross-origin refusal, rate limiting, and Google token verification (a forged token is refused rather than trusted).
 
 ## The game
 
