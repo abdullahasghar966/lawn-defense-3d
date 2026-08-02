@@ -106,11 +106,28 @@ async function issueSession(res, user) {
   setSessionCookie(res, token);
 }
 
+/**
+ * Issues a code and tries to deliver it.
+ *
+ * Returns whether delivery succeeded rather than throwing: the code is already
+ * stored by this point, so letting an SMTP error propagate would turn a
+ * misconfigured mail server into a 500 on an account that was created fine.
+ */
 async function startVerification(email, purpose) {
   const { code, hash } = newOtp();
   await otps.put(email, hash, purpose, OTP_TTL_MS);
-  await sendOtpEmail(email, code);
+  try {
+    await sendOtpEmail(email, code);
+    return { delivered: true };
+  } catch (err) {
+    // Prefixed so it is findable in a hosting provider's log search.
+    console.error(`[MAIL FAILURE] could not send verification code: ${err.message}`);
+    if (err.code) console.error(`[MAIL FAILURE] code=${err.code} command=${err.command || 'n/a'}`);
+    return { delivered: false, error: err };
+  }
 }
+
+const MAIL_FAILED = 'We could not send the verification email just now. Please try again in a moment.';
 
 export const router = Router();
 
@@ -159,7 +176,8 @@ router.post('/auth/signup',
     if (existing) await users.setPassword(existing.id, passwordHash);
     else await users.create({ email, passwordHash, verified: 0 });
 
-    await startVerification(email, 'signup');
+    const sent = await startVerification(email, 'signup');
+    if (!sent.delivered) return res.status(502).json({ error: MAIL_FAILED, next: 'verify' });
     res.json({ ok: true, next: 'verify', message: 'Check your email for a 6-digit code.' });
   });
 
@@ -215,7 +233,10 @@ router.post('/auth/resend',
 
     const user = await users.byEmail(email);
     // Same response whether or not there is anything to send.
-    if (user && !user.verified) await startVerification(email, 'signup');
+    if (user && !user.verified) {
+      const sent = await startVerification(email, 'signup');
+      if (!sent.delivered) return res.status(502).json({ error: MAIL_FAILED });
+    }
     res.json({ ok: true, message: 'If that address needs verifying, a new code is on its way.' });
   });
 
@@ -242,8 +263,13 @@ router.post('/auth/login',
 
     // Only revealed to someone who already proved they know the password.
     if (!user.verified) {
-      await startVerification(email, 'signup');
-      return res.status(403).json({ error: 'Verify your email to finish setting up this account.', next: 'verify' });
+      const sent = await startVerification(email, 'signup');
+      return res.status(403).json({
+        error: sent.delivered
+          ? 'Verify your email to finish setting up this account.'
+          : `${MAIL_FAILED} Your account is fine — the code just could not be sent.`,
+        next: 'verify',
+      });
     }
 
     await issueSession(res, user);

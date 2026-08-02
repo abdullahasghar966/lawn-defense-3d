@@ -19,6 +19,12 @@ const transport = mailConfigured
     port,
     secure: port === 465, // 465 is implicit TLS; 587 upgrades via STARTTLS
     auth: { user, pass },
+    // Serverless functions are killed at a hard time limit. Without these an
+    // unreachable mail host hangs until the platform kills the whole request,
+    // which looks like a crash rather than "email is misconfigured".
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
   })
   : null;
 
@@ -34,6 +40,8 @@ export async function sendOtpEmail(to, code) {
     return { delivered: false };
   }
 
+  // Callers decide what to do with a failure; they must not let it escape as a
+  // 500, because by this point the account and code already exist.
   await transport.sendMail({
     from,
     to,
